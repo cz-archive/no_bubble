@@ -1,12 +1,17 @@
-name: Upload Release Asset
+name: Release xime.custom.yaml
 
-# 在 Release 发布时，把 xime.custom.yaml 作为附件上传到该 Release。
-# Release 附件不可变，因此会有一个固定的 sha256 值（在 Release 页面可看到 digest）。
+# 触发方式：
+#   1) 推送 tag（用 git/SSH 即可）→ 自动创建 Release 并上传附件
+#   2) 在 GitHub 网页上发布 Release → 上传附件
+#   3) Actions 页面手动指定 tag 重新执行（兜底）
+#
+# 附件不可变，因此会有一个固定的 sha256 值（Release 页面可看到 digest）。
 on:
+  push:
+    tags:
+      - "*"
   release:
     types: [published]
-  # 兜底入口：万一 release 事件没能触发（例如 tag 早于本 workflow），
-  # 可以在 Actions 页面手动指定 tag 重新上传。
   workflow_dispatch:
     inputs:
       tag:
@@ -14,29 +19,42 @@ on:
         required: true
         type: string
 
-# 上传 Release 附件需要写权限
+# 创建 Release / 上传附件需要写权限
 permissions:
   contents: write
 
 jobs:
-  upload:
-    name: Upload xime.custom.yaml
+  release:
+    name: Publish release & upload xime.custom.yaml
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          echo "name=${{ inputs.tag || github.event.release.tag_name || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # release 事件取 release 的 tag；手动触发时取输入的 tag
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ steps.tag.outputs.name }}
 
       - name: Generate SHA256 checksum
         run: sha256sum xime.custom.yaml > xime.custom.yaml.sha256
 
-      - name: Upload assets to release
+      - name: Ensure release exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name || inputs.tag }}" \
+          tag="${{ steps.tag.outputs.name }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes --verify-tag
+          fi
+
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.name }}" \
             xime.custom.yaml \
             xime.custom.yaml.sha256 \
             --clobber
